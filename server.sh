@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# Script para configurar nginx con HTTPS en Ubuntu Server
+# Script para montar API de prueba con nginx como proxy reverso
 # Autor: Script automatizado
 # Fecha: $(date)
 
 set -e  # Salir si hay algún error
 
 echo "=========================================="
-echo "Configurando nginx con HTTPS en Ubuntu"
+echo "Configurando API de prueba con nginx"
 echo "=========================================="
 
 # Colores para output
@@ -41,134 +41,307 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # Variables configurables
+API_DIR="/opt/test-api"
+API_PORT="3000"
+API_USER="apiuser"
 DOMAIN="localhost"
 CERT_DIR="/etc/nginx/ssl"
-NGINX_CONF="/etc/nginx/sites-available/default-https"
-WEB_ROOT="/var/www/html"
 
-# Actualizar paquetes del sistema
-print_status "Actualizando paquetes del sistema..."
-apt update
+# Crear usuario para el API si no existe
+if ! id "$API_USER" &>/dev/null; then
+    print_status "Creando usuario para el API..."
+    useradd -r -s /bin/bash -m -d "$API_DIR" "$API_USER"
+fi
 
-# Instalar nginx y openssl
-print_status "Instalando nginx y openssl..."
-apt install -y nginx openssl
+# Instalar Node.js y npm
+print_status "Instalando Node.js y npm..."
+curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+apt install -y nodejs
 
-# Crear directorio para certificados SSL
-print_status "Creando directorio para certificados SSL..."
-mkdir -p $CERT_DIR
+# Verificar instalación de Node.js
+node_version=$(node --version)
+npm_version=$(npm --version)
+print_success "Node.js $node_version y npm $npm_version instalados"
 
-# Generar certificado autofirmado
-print_status "Generando certificado SSL autofirmado..."
-openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-    -keyout $CERT_DIR/nginx-selfsigned.key \
-    -out $CERT_DIR/nginx-selfsigned.crt \
-    -subj "/C=CO/ST=Narino/L=Pasto/O=TestOrg/OU=IT/CN=$DOMAIN"
+# Crear directorio para el API
+print_status "Creando estructura del proyecto API..."
+mkdir -p "$API_DIR"
+cd "$API_DIR"
 
-# Generar parámetros DH para mayor seguridad
-print_status "Generando parámetros Diffie-Hellman (esto puede tomar unos minutos)..."
-openssl dhparam -out $CERT_DIR/dhparam.pem 2048
-
-# Establecer permisos seguros para los certificados
-chmod 600 $CERT_DIR/nginx-selfsigned.key
-chmod 644 $CERT_DIR/nginx-selfsigned.crt
-chmod 644 $CERT_DIR/dhparam.pem
-
-# Crear configuración SSL snippet
-print_status "Creando configuración SSL..."
-cat > /etc/nginx/snippets/self-signed.conf << EOF
-ssl_certificate $CERT_DIR/nginx-selfsigned.crt;
-ssl_certificate_key $CERT_DIR/nginx-selfsigned.key;
+# Crear package.json
+print_status "Creando configuración del proyecto..."
+cat > package.json << 'EOF'
+{
+  "name": "test-api",
+  "version": "1.0.0",
+  "description": "API de prueba para servidor nginx HTTPS",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "helmet": "^7.0.0",
+    "morgan": "^1.10.0"
+  },
+  "keywords": ["api", "test", "nginx", "https"],
+  "author": "Test API",
+  "license": "MIT"
+}
 EOF
 
-cat > /etc/nginx/snippets/ssl-params.conf << EOF
-ssl_protocols TLSv1.2 TLSv1.3;
-ssl_prefer_server_ciphers on;
-ssl_dhparam $CERT_DIR/dhparam.pem;
-ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-SHA384;
-ssl_ecdh_curve secp384r1;
-ssl_session_timeout 10m;
-ssl_session_cache shared:SSL:10m;
-ssl_session_tickets off;
-ssl_stapling on;
-ssl_stapling_verify on;
-resolver 8.8.8.8 8.8.4.4 valid=300s;
-resolver_timeout 5s;
-add_header X-Frame-Options DENY;
-add_header X-Content-Type-Options nosniff;
-add_header X-XSS-Protection "1; mode=block";
+# Instalar dependencias
+print_status "Instalando dependencias de Node.js..."
+npm install
+
+# Crear el servidor API
+print_status "Creando servidor API..."
+cat > server.js << 'EOF'
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const morgan = require('morgan');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Middleware de seguridad
+app.use(helmet());
+app.use(cors());
+app.use(morgan('combined'));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Base de datos simulada en memoria
+let users = [
+    { id: 1, name: 'Juan Pérez', email: 'juan@ejemplo.com', city: 'Pasto' },
+    { id: 2, name: 'María González', email: 'maria@ejemplo.com', city: 'Bogotá' },
+    { id: 3, name: 'Carlos Rodríguez', email: 'carlos@ejemplo.com', city: 'Medellín' }
+];
+
+let products = [
+    { id: 1, name: 'Laptop HP', price: 2500000, category: 'Electrónicos', stock: 10 },
+    { id: 2, name: 'Mouse Logitech', price: 85000, category: 'Accesorios', stock: 25 },
+    { id: 3, name: 'Teclado Mecánico', price: 250000, category: 'Accesorios', stock: 15 }
+];
+
+// Rutas de información del API
+app.get('/', (req, res) => {
+    res.json({
+        message: '¡API de prueba funcionando!',
+        version: '1.0.0',
+        timestamp: new Date().toISOString(),
+        endpoints: {
+            users: '/api/users',
+            products: '/api/products',
+            health: '/api/health',
+            info: '/api/info'
+        }
+    });
+});
+
+app.get('/api/health', (req, res) => {
+    res.json({
+        status: 'OK',
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+        memory: process.memoryUsage(),
+        server: 'nginx + Node.js API'
+    });
+});
+
+app.get('/api/info', (req, res) => {
+    res.json({
+        api_name: 'Test API',
+        version: '1.0.0',
+        node_version: process.version,
+        environment: process.env.NODE_ENV || 'development',
+        port: PORT,
+        timestamp: new Date().toISOString()
+    });
+});
+
+// CRUD para usuarios
+app.get('/api/users', (req, res) => {
+    res.json({
+        success: true,
+        data: users,
+        total: users.length
+    });
+});
+
+app.get('/api/users/:id', (req, res) => {
+    const user = users.find(u => u.id === parseInt(req.params.id));
+    if (!user) {
+        return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+    res.json({ success: true, data: user });
+});
+
+app.post('/api/users', (req, res) => {
+    const { name, email, city } = req.body;
+    if (!name || !email) {
+        return res.status(400).json({ success: false, message: 'Nombre y email requeridos' });
+    }
+    
+    const newUser = {
+        id: Math.max(...users.map(u => u.id)) + 1,
+        name,
+        email,
+        city: city || 'No especificada'
+    };
+    
+    users.push(newUser);
+    res.status(201).json({ success: true, data: newUser });
+});
+
+app.put('/api/users/:id', (req, res) => {
+    const userId = parseInt(req.params.id);
+    const userIndex = users.findIndex(u => u.id === userId);
+    
+    if (userIndex === -1) {
+        return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+    
+    users[userIndex] = { ...users[userIndex], ...req.body, id: userId };
+    res.json({ success: true, data: users[userIndex] });
+});
+
+app.delete('/api/users/:id', (req, res) => {
+    const userId = parseInt(req.params.id);
+    const userIndex = users.findIndex(u => u.id === userId);
+    
+    if (userIndex === -1) {
+        return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+    
+    const deletedUser = users.splice(userIndex, 1)[0];
+    res.json({ success: true, message: 'Usuario eliminado', data: deletedUser });
+});
+
+// CRUD para productos
+app.get('/api/products', (req, res) => {
+    const { category, minPrice, maxPrice } = req.query;
+    let filteredProducts = [...products];
+    
+    if (category) {
+        filteredProducts = filteredProducts.filter(p => 
+            p.category.toLowerCase().includes(category.toLowerCase())
+        );
+    }
+    
+    if (minPrice) {
+        filteredProducts = filteredProducts.filter(p => p.price >= parseInt(minPrice));
+    }
+    
+    if (maxPrice) {
+        filteredProducts = filteredProducts.filter(p => p.price <= parseInt(maxPrice));
+    }
+    
+    res.json({
+        success: true,
+        data: filteredProducts,
+        total: filteredProducts.length,
+        filters: { category, minPrice, maxPrice }
+    });
+});
+
+app.get('/api/products/:id', (req, res) => {
+    const product = products.find(p => p.id === parseInt(req.params.id));
+    if (!product) {
+        return res.status(404).json({ success: false, message: 'Producto no encontrado' });
+    }
+    res.json({ success: true, data: product });
+});
+
+app.post('/api/products', (req, res) => {
+    const { name, price, category, stock } = req.body;
+    if (!name || !price || !category) {
+        return res.status(400).json({ 
+            success: false, 
+            message: 'Nombre, precio y categoría requeridos' 
+        });
+    }
+    
+    const newProduct = {
+        id: Math.max(...products.map(p => p.id)) + 1,
+        name,
+        price: parseFloat(price),
+        category,
+        stock: parseInt(stock) || 0
+    };
+    
+    products.push(newProduct);
+    res.status(201).json({ success: true, data: newProduct });
+});
+
+// Middleware para manejar rutas no encontradas
+app.use('*', (req, res) => {
+    res.status(404).json({
+        success: false,
+        message: 'Ruta no encontrada',
+        path: req.originalUrl
+    });
+});
+
+// Middleware de manejo de errores
+app.use((err, req, res, next) => {
+    console.error(err.stack);
+    res.status(500).json({
+        success: false,
+        message: 'Error interno del servidor'
+    });
+});
+
+// Iniciar servidor
+app.listen(PORT, '127.0.0.1', () => {
+    console.log(`🚀 API de prueba corriendo en http://127.0.0.1:${PORT}`);
+    console.log(`📊 Health check: http://127.0.0.1:${PORT}/api/health`);
+    console.log(`👥 Usuarios: http://127.0.0.1:${PORT}/api/users`);
+    console.log(`📦 Productos: http://127.0.0.1:${PORT}/api/products`);
+});
+
+// Manejo de cierre graceful
+process.on('SIGTERM', () => {
+    console.log('🛑 Servidor API cerrándose...');
+    process.exit(0);
+});
+
+process.on('SIGINT', () => {
+    console.log('🛑 Servidor API cerrándose...');
+    process.exit(0);
+});
 EOF
 
-# Crear página web de prueba
-print_status "Creando página web de prueba..."
-cat > $WEB_ROOT/index.html << EOF
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Servidor HTTPS - Funcionando</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        .container {
-            text-align: center;
-            padding: 2rem;
-            background: rgba(255,255,255,0.1);
-            border-radius: 10px;
-            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
-        }
-        h1 {
-            font-size: 3rem;
-            margin-bottom: 1rem;
-        }
-        .status {
-            font-size: 1.2rem;
-            margin: 1rem 0;
-        }
-        .lock {
-            font-size: 4rem;
-            color: #4ade80;
-            margin-bottom: 1rem;
-        }
-        .info {
-            background: rgba(255,255,255,0.2);
-            padding: 1rem;
-            border-radius: 5px;
-            margin-top: 2rem;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="lock">🔒</div>
-        <h1>¡HTTPS Funcionando!</h1>
-        <div class="status">Servidor nginx configurado correctamente</div>
-        <div class="status">Conexión segura establecida</div>
-        <div class="info">
-            <strong>Información:</strong><br>
-            Servidor: nginx<br>
-            Protocolo: HTTPS<br>
-            Certificado: Autofirmado (Prueba)<br>
-            Fecha: $(date)
-        </div>
-    </div>
-</body>
-</html>
+# Crear archivo de servicio systemd
+print_status "Creando servicio systemd..."
+cat > /etc/systemd/system/test-api.service << EOF
+[Unit]
+Description=Test API Server
+Documentation=https://nodejs.org
+After=network.target
+
+[Service]
+Environment=NODE_ENV=production
+Type=simple
+User=$API_USER
+ExecStart=/usr/bin/node $API_DIR/server.js
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
-# Crear configuración del sitio nginx para HTTPS
-print_status "Configurando nginx para HTTPS..."
-cat > $NGINX_CONF << EOF
+# Establecer permisos
+chown -R $API_USER:$API_USER $API_DIR
+chmod +x $API_DIR/server.js
+
+# Configurar nginx como proxy reverso
+print_status "Configurando nginx como proxy reverso..."
+cat > /etc/nginx/sites-available/api-https << EOF
 server {
     listen 80;
     server_name $DOMAIN;
@@ -185,18 +358,37 @@ server {
     include snippets/self-signed.conf;
     include snippets/ssl-params.conf;
 
-    root $WEB_ROOT;
-    index index.html index.htm;
-
-    location / {
-        try_files \$uri \$uri/ =404;
-    }
+    root /var/www/html;
+    index index.html;
 
     # Logs
-    access_log /var/log/nginx/https_access.log;
-    error_log /var/log/nginx/https_error.log;
+    access_log /var/log/nginx/api_access.log;
+    error_log /var/log/nginx/api_error.log;
 
-    # Configuraciones adicionales de seguridad
+    # Página principal
+    location = / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    # Proxy para el API
+    location /api/ {
+        proxy_pass http://127.0.0.1:$API_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_cache_bypass \$http_upgrade;
+        
+        # Timeout settings
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # Archivos estáticos
     location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
@@ -204,13 +396,215 @@ server {
 }
 EOF
 
-# Deshabilitar sitio default y habilitar el nuevo
-print_status "Configurando sitios nginx..."
-rm -f /etc/nginx/sites-enabled/default
-ln -sf $NGINX_CONF /etc/nginx/sites-enabled/
+# Actualizar página principal con información del API
+print_status "Actualizando página principal..."
+cat > /var/www/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API de Prueba - HTTPS</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 3rem;
+            padding: 2rem;
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+        }
+        .api-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+        .card {
+            background: rgba(255,255,255,0.15);
+            padding: 2rem;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        .endpoint {
+            margin-bottom: 1rem;
+        }
+        .method {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-weight: bold;
+            margin-right: 1rem;
+            font-size: 0.8rem;
+        }
+        .get { background: #4ade80; color: black; }
+        .post { background: #fbbf24; color: black; }
+        .put { background: #60a5fa; color: black; }
+        .delete { background: #f87171; color: black; }
+        .url {
+            background: rgba(0,0,0,0.3);
+            padding: 0.5rem;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            word-break: break-all;
+        }
+        .test-section {
+            background: rgba(255,255,255,0.1);
+            padding: 2rem;
+            border-radius: 15px;
+            margin-top: 2rem;
+        }
+        button {
+            background: #4ade80;
+            color: black;
+            border: none;
+            padding: 1rem 2rem;
+            border-radius: 25px;
+            font-weight: bold;
+            cursor: pointer;
+            margin: 0.5rem;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+        }
+        .response {
+            background: rgba(0,0,0,0.3);
+            padding: 1rem;
+            border-radius: 10px;
+            margin-top: 1rem;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        pre {
+            white-space: pre-wrap;
+            font-size: 0.9rem;
+        }
+        .status { margin: 1rem 0; }
+        .lock { font-size: 3rem; margin-bottom: 1rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="lock">🔒🚀</div>
+            <h1>API de Prueba - HTTPS</h1>
+            <div class="status">Servidor nginx + Node.js funcionando</div>
+        </div>
+
+        <div class="api-grid">
+            <div class="card">
+                <h2>👥 Usuarios API</h2>
+                <div class="endpoint">
+                    <span class="method get">GET</span>
+                    <div class="url">/api/users</div>
+                </div>
+                <div class="endpoint">
+                    <span class="method get">GET</span>
+                    <div class="url">/api/users/:id</div>
+                </div>
+                <div class="endpoint">
+                    <span class="method post">POST</span>
+                    <div class="url">/api/users</div>
+                </div>
+                <div class="endpoint">
+                    <span class="method put">PUT</span>
+                    <div class="url">/api/users/:id</div>
+                </div>
+                <div class="endpoint">
+                    <span class="method delete">DELETE</span>
+                    <div class="url">/api/users/:id</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>📦 Productos API</h2>
+                <div class="endpoint">
+                    <span class="method get">GET</span>
+                    <div class="url">/api/products</div>
+                </div>
+                <div class="endpoint">
+                    <span class="method get">GET</span>
+                    <div class="url">/api/products/:id</div>
+                </div>
+                <div class="endpoint">
+                    <span class="method post">POST</span>
+                    <div class="url">/api/products</div>
+                </div>
+                <p><strong>Filtros:</strong> ?category=X&minPrice=Y&maxPrice=Z</p>
+            </div>
+
+            <div class="card">
+                <h2>🔧 Sistema</h2>
+                <div class="endpoint">
+                    <span class="method get">GET</span>
+                    <div class="url">/api/health</div>
+                </div>
+                <div class="endpoint">
+                    <span class="method get">GET</span>
+                    <div class="url">/api/info</div>
+                </div>
+                <div class="endpoint">
+                    <span class="method get">GET</span>
+                    <div class="url">/api/</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h2>🧪 Pruebas Rápidas</h2>
+            <button onclick="testEndpoint('/api/health')">Health Check</button>
+            <button onclick="testEndpoint('/api/users')">Ver Usuarios</button>
+            <button onclick="testEndpoint('/api/products')">Ver Productos</button>
+            <button onclick="testEndpoint('/api/info')">Info del API</button>
+            
+            <div class="response" id="response" style="display:none;">
+                <h3>Respuesta:</h3>
+                <pre id="responseContent"></pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function testEndpoint(endpoint) {
+            const responseDiv = document.getElementById('response');
+            const responseContent = document.getElementById('responseContent');
+            
+            try {
+                responseDiv.style.display = 'block';
+                responseContent.textContent = 'Cargando...';
+                
+                const response = await fetch(endpoint);
+                const data = await response.json();
+                
+                responseContent.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                responseContent.textContent = `Error: ${error.message}`;
+            }
+        }
+    </script>
+</body>
+</html>
+EOF
+
+# Habilitar nueva configuración de nginx
+rm -f /etc/nginx/sites-enabled/default-https
+ln -sf /etc/nginx/sites-available/api-https /etc/nginx/sites-enabled/
 
 # Verificar configuración de nginx
-print_status "Verificando configuración de nginx..."
 if nginx -t; then
     print_success "Configuración de nginx válida"
 else
@@ -218,51 +612,55 @@ else
     exit 1
 fi
 
-# Configurar firewall (si ufw está activo)
-if ufw status | grep -q "Status: active"; then
-    print_status "Configurando firewall..."
-    ufw allow 'Nginx Full'
-    ufw delete allow 'Nginx HTTP' 2>/dev/null || true
-fi
+# Habilitar y iniciar servicios
+print_status "Habilitando servicios..."
+systemctl daemon-reload
+systemctl enable test-api
+systemctl start test-api
+systemctl reload nginx
 
-# Habilitar y reiniciar nginx
-print_status "Habilitando y reiniciando nginx..."
-systemctl enable nginx
-systemctl restart nginx
+# Esperar a que el API inicie
+sleep 3
 
-# Verificar que nginx esté funcionando
-if systemctl is-active --quiet nginx; then
-    print_success "nginx está funcionando correctamente"
+# Verificar que los servicios estén funcionando
+if systemctl is-active --quiet test-api && systemctl is-active --quiet nginx; then
+    print_success "Todos los servicios están funcionando correctamente"
 else
-    print_error "nginx no está funcionando"
+    print_error "Algunos servicios no están funcionando"
+    systemctl status test-api
     exit 1
 fi
 
 # Mostrar información final
 echo ""
 echo "=========================================="
-print_success "¡Configuración completada exitosamente!"
+print_success "¡API de prueba configurada exitosamente!"
 echo "=========================================="
 echo ""
-echo "Información del servidor:"
-echo "------------------------"
-echo "URL HTTPS: https://$DOMAIN"
-echo "URL HTTP: http://$DOMAIN (redirige a HTTPS)"
-echo "Directorio web: $WEB_ROOT"
-echo "Certificados SSL: $CERT_DIR"
-echo "Logs nginx: /var/log/nginx/"
+echo "URLs disponibles:"
+echo "----------------"
+echo "🌐 Interfaz web: https://$DOMAIN"
+echo "🔧 Health check: https://$DOMAIN/api/health"
+echo "👥 Usuarios: https://$DOMAIN/api/users"
+echo "📦 Productos: https://$DOMAIN/api/products"
 echo ""
 echo "Comandos útiles:"
 echo "---------------"
-echo "Estado nginx: systemctl status nginx"
-echo "Reiniciar nginx: systemctl restart nginx"
-echo "Ver logs: tail -f /var/log/nginx/https_access.log"
-echo "Probar configuración: nginx -t"
+echo "Ver estado API: systemctl status test-api"
+echo "Ver logs API: journalctl -u test-api -f"
+echo "Reiniciar API: systemctl restart test-api"
+echo "Ver logs nginx: tail -f /var/log/nginx/api_access.log"
 echo ""
-print_warning "IMPORTANTE: Este certificado es autofirmado y solo para pruebas."
-print_warning "Los navegadores mostrarán una advertencia de seguridad."
-print_warning "Para producción, usa certificados de Let's Encrypt o una CA válida."
+echo "Pruebas con curl:"
+echo "----------------"
+echo "curl -k https://localhost/api/health"
+echo "curl -k https://localhost/api/users"
+echo "curl -k https://localhost/api/products"
 echo ""
-echo "Para probar:"
-echo "curl -k https://localhost"
-echo "curl -k https://$(hostname -I | awk '{print $1}')"
+echo "Crear usuario:"
+echo 'curl -k -X POST https://localhost/api/users \'
+echo '  -H "Content-Type: application/json" \'
+echo '  -d {"name":"Test User","email":"test@example.com","city":"Pasto"}'
+echo ""
+print_warning "El API corre en el puerto $API_PORT internamente"
+print_warning "nginx actúa como proxy reverso con HTTPS"
