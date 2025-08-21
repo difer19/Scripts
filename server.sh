@@ -72,20 +72,27 @@ if ! id "$API_USER" &>/dev/null; then
     useradd -r -s /bin/bash -m -d "$API_DIR" "$API_USER"
 fi
 
-# 4. Crear certificados SSL
-print_status "Creando certificados SSL..."
+# 4. Crear certificados SSL con mkcert
+print_status "Creando certificados SSL válidos con mkcert..."
+
+apt install -y libnss3-tools # necesario para Firefox/Chrome confiar en CA
+if ! command -v mkcert > /dev/null; then
+    curl -JLO "https://dl.filippo.io/mkcert/latest?for=linux/amd64"
+    chmod +x mkcert-v*-linux-amd64
+    mv mkcert-v*-linux-amd64 /usr/local/bin/mkcert
+    mkcert -install
+fi
+
 mkdir -p $CERT_DIR
 
-openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-    -keyout $CERT_DIR/nginx-selfsigned.key \
-    -out $CERT_DIR/nginx-selfsigned.crt \
-    -subj "/C=CO/ST=Narino/L=Pasto/O=TestOrg/OU=IT/CN=$SERVER_IP"
+# dominio local
+DOMAIN="miapi.local"
 
-openssl dhparam -out $CERT_DIR/dhparam.pem 2048
+mkcert -cert-file $CERT_DIR/nginx-cert.pem -key-file $CERT_DIR/nginx-key.pem $DOMAIN
 
-chmod 600 $CERT_DIR/nginx-selfsigned.key
-chmod 644 $CERT_DIR/nginx-selfsigned.crt
-chmod 644 $CERT_DIR/dhparam.pem
+# ajustar permisos
+chmod 600 $CERT_DIR/nginx-key.pem
+chmod 644 $CERT_DIR/nginx-cert.pem
 
 # 5. Crear snippets SSL
 print_status "Configurando SSL snippets..."
